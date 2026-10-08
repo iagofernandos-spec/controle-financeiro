@@ -334,6 +334,11 @@ test('nuvem: registros do estado e validação do que vem da nuvem', () => {
   assert.equal(sanitize('txs', 'x', { kind: 'nada', value: 100, date: '2026-10-01', desc: 'Ok' }), null);
   assert.equal(sanitize('goals', 'g', { name: 'Viagem', target: 100000, saved: 0 }).target, 100000);
   assert.equal(sanitize('cards', 'c', { name: 'Cartão', limit: 0, close: 40, due: 5 }).close, 5);
+  const okAdj = sanitize('cards', 'c', { name: 'Cartão', limit: 0, close: 5, due: 5, adjust: { '2026-10': 1234, x: 9, '2026-11': 'nope' } });
+  assert.deepEqual(okAdj.adjust, { '2026-10': 1234 });
+  const okEstorno = sanitize('txs', 'x', { kind: 'income', value: 100, date: '2026-10-01', desc: 'Estorno', cardId: 'c' });
+  assert.equal(okEstorno.paid, true); // estorno no cartão é sempre "pago"
+  assert.equal(okEstorno.cardId, 'c');
   const st = sanitize('settings', 's', { cats: { expense: ['A', 'a', 'B'], income: ['C'] }, limits: { A: 1000, '': 5 }, theme: 'tokyo', autoLock: 5, privacy: true });
   assert.deepEqual(st.cats.expense, ['A', 'B']); // sem duplicata (maiúsc./minúsc.)
   assert.deepEqual(Object.keys(st.limits), ['A']);

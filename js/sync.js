@@ -68,9 +68,10 @@ export function sanitize(col, id, v) {
     const value = icents(v.value), date = typeof v.date === 'string' && validDate(v.date) ? v.date : null;
     const desc = istr(v.desc, 200);
     if (!kind || !value || !date || !desc) return null;
+    const cardId = idOf(v.cardId, 48);
     return coreTx({
-      id, kind, value, date, desc, category: istr(v.category, 40) || 'Outros', paid: v.paid === true,
-      accountId: idOf(v.accountId, 48) || undefined, cardId: idOf(v.cardId, 48), cardPayment: idOf(v.cardPayment, 48),
+      id, kind, value, date, desc, category: istr(v.category, 40) || 'Outros', paid: cardId ? true : v.paid === true,
+      accountId: idOf(v.accountId, 48) || undefined, cardId, cardPayment: idOf(v.cardPayment, 48),
       recurringId: idOf(v.recurringId, 48), groupId: idOf(v.groupId, 48),
       parcelN: iint(v.parcelN, 0, 120, 0), parcelTotal: iint(v.parcelTotal, 0, 120, 0),
     });
@@ -88,7 +89,9 @@ export function sanitize(col, id, v) {
   if (col === 'cards') {
     const name = istr(v.name, 40); const limit = icents0(v.limit);
     if (!name || limit == null) return null;
-    return { id, name, limit, close: iint(v.close, 1, 31, 5), due: iint(v.due, 1, 31, 12) };
+    const adjust = {};
+    if (isObj(v.adjust)) for (const [k, val] of Object.entries(v.adjust)) { const n = imag(val); if (/^\d{4}-(0[1-9]|1[0-2])$/.test(k) && n != null) adjust[k] = n; }
+    return { id, name, limit, close: iint(v.close, 1, 31, 5), due: iint(v.due, 1, 31, 12), adjust };
   }
   if (col === 'recurring') {
     const kind = v.kind === 'income' || v.kind === 'expense' ? v.kind : null;

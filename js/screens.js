@@ -128,7 +128,7 @@ function walletSection() {
       <b>${cur ? money(cur.open) : money(0)}</b>
       <span class="sub">${cur ? `Fatura ${esc(brMonthLabel(cur.ym))} · vence ${brDayMonth(cur.due)}${cur.closed ? ' · fechada' : ''}` : 'Sem fatura em aberto'}</span>
       <span class="sub">Disponível ${money(st.available)}</span>
-      <div class="cardActions">${cur ? btn('Pagar fatura', { act: 'pay-invoice', data: { id: c.id }, cls: 'primary small' }) : ''}${btn('', { act: 'edit-card', data: { id: c.id }, cls: 'icon tiny', icon: 'edit', iconSize: 16, label: `Editar cartão ${c.name}` })}</div></div>`;
+      <div class="cardActions">${cur ? btn('Pagar fatura', { act: 'pay-invoice', data: { id: c.id }, cls: 'primary small' }) : ''}${st.invoices.length ? btn('Ajustar', { act: 'adjust-invoice', data: { id: c.id }, cls: 'soft small', icon: 'edit_note', iconSize: 15, label: `Ajustar fatura de ${c.name}` }) : ''}${btn('', { act: 'edit-card', data: { id: c.id }, cls: 'icon tiny', icon: 'edit', iconSize: 16, label: `Editar cartão ${c.name}` })}</div></div>`;
   }).join('');
   return `<section class="section">${sectionHead('Patrimônio', 'Contas e cartões', btn('Gerenciar', { act: 'go', data: { view: 'prefs', fold: 'contas' }, cls: 'soft small' }))}
     <div class="${ctx.cols === 1 ? 'hscroll' : 'walletGrid'}">${accs}${cards}</div></section>`;
@@ -228,7 +228,7 @@ export function txRow(t) {
   const late = !t.paid && !cardT && t.date < ctx.today;
   const status = payment ? 'Pagamento de fatura' : cardT ? '' : t.paid ? '' : late ? '<span class="red">Em atraso</span>' : (t.kind === 'income' ? 'A receber' : 'A pagar');
   const meta = [esc(t.category), esc(where), brDate(t.date), status].filter(Boolean).join(' · ');
-  const toggle = cardT ? `<span class="chk card" title="Compra no cartão">${icon('credit-card', 16)}</span>`
+  const toggle = cardT ? `<span class="chk card" title="${t.kind === 'income' ? 'Estorno no cartão' : 'Compra no cartão'}">${icon('credit-card', 16)}</span>`
     : payment ? `<span class="chk on" title="Pagamento de fatura">${icon('check', 16)}</span>`
       : `<button type="button" class="chk${t.paid ? ' on' : ''}" data-act="toggle-paid" data-id="${attr(t.id)}" aria-pressed="${t.paid}" aria-label="${t.paid ? (t.kind === 'income' ? 'Recebido' : 'Pago') : (t.kind === 'income' ? 'Marcar como recebido' : 'Marcar como pago')}: ${attr(t.desc)}">${icon('check', 16)}</button>`;
   return `<div class="tx ${t.kind}${t.paid ? '' : ' pending'}${payment ? ' payment' : ''}" data-act="edit-tx" data-id="${attr(t.id)}" role="button" tabindex="0" aria-label="${attr(t.desc)}, ${t.kind === 'income' ? 'receita' : 'despesa'} de ${attr(money(t.value))} em ${brDate(t.date)}">

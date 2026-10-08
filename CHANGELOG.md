@@ -1,5 +1,11 @@
 # Changelog — Controle Financeiro (PWA)
 
+## 1.0.3 — estorno no cartão e ajuste da fatura (08/10/2026)
+
+- **Estorno no cartão:** ao lançar uma **Receita**, escolha "Estorno no cartão (crédito na fatura)" na forma de pagamento — o valor entra como crédito na fatura (seguindo o lançamento e o fechamento) e reduz o limite usado. Se o estorno for maior que a fatura, o que sobrar abate a fatura seguinte. Não mexe no saldo das contas.
+- **Ajustar fatura:** cada cartão ganha o botão **"Ajustar"** — escolha a fatura e informe o valor fechado do banco; o total passa a ser esse valor, sem apagar nem alterar os lançamentos. Informe de volta o valor calculado (ou deixe vazio) para voltar ao normal.
+- Testes: 115 (`node --test`), todos passando.
+
 ## 1.0.2 — faturas de cartão pelas datas (08/10/2026)
 
 - **Compras parceladas antigas não aparecem mais como atrasadas:** a fatura de cada compra segue a data do lançamento e o **fechamento** do cartão; o **vencimento** define o que ainda está em aberto. Faturas já vencidas (vencimento antes de hoje) são consideradas pagas automaticamente — ex.: compra em 25/06 num cartão que fecha dia 02 cai na fatura de julho e não conta como atraso.

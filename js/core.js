@@ -135,7 +135,7 @@ export function newState(over = {}) {
 }
 export const clone = s => ({
   ...s, txs: s.txs.map(t => ({ ...t })), goals: s.goals.map(g => ({ ...g })), accounts: s.accounts.map(a => ({ ...a })),
-  cards: s.cards.map(c => ({ ...c })), recurring: s.recurring.map(r => ({ ...r })),
+  cards: s.cards.map(c => ({ ...c, adjust: { ...(c.adjust || {}) } })), recurring: s.recurring.map(r => ({ ...r })),
   cats: { expense: [...s.cats.expense], income: [...s.cats.income] }, limits: new Map(s.limits),
 });
 export const account = (s, id) => s.accounts.find(a => a.id === id);
@@ -152,13 +152,15 @@ export const Finance = {
 
   /** Limite usado inclui parcelas futuras. A lógica segue as datas: o lançamento da compra define
    *  a fatura (pelo fechamento) e o vencimento define o que ainda está em aberto — faturas já
-   *  vencidas (vencimento antes de hoje) são consideradas pagas. Pagamentos abatem as faturas em
-   *  aberto (mais antiga primeiro); um pagamento feito para fatura já vencida fica com ela. */
+   *  vencidas (vencimento antes de hoje) são consideradas pagas. Estornos (receita no cartão)
+   *  reduzem a fatura e `c.adjust` fixa o valor fechado de uma fatura específica. Pagamentos abatem
+   *  as faturas em aberto (mais antiga primeiro); um pagamento feito para fatura já vencida fica com ela. */
   cardStatus(s, c, today) {
-    const purchases = s.txs.filter(t => t.cardId === c.id && t.kind === 'expense');
+    const purchases = s.txs.filter(t => t.cardId === c.id);
     const payments = s.txs.filter(t => t.cardPayment === c.id && t.paid);
     const by = new Map();
-    for (const p of purchases) { const k = Finance.invoiceYm(c, p.date); by.set(k, (by.get(k) || 0) + p.value); }
+    for (const p of purchases) { const k = Finance.invoiceYm(c, p.date); by.set(k, (by.get(k) || 0) + (p.kind === 'income' ? -p.value : p.value)); }
+    for (const [k, v] of Object.entries(c.adjust || {})) { const m = parseYm(k); if (m != null) by.set(m, v); } // valor fechado do banco
     // fatura que cada pagamento abate: a última fechada até a data do pagamento
     const targetYm = d => { const y0 = ymOf(d); return dom(d) >= Math.min(c.close, ymLen(y0)) ? y0 : y0 - 1; };
     let left = 0;
@@ -167,8 +169,10 @@ export const Finance = {
     const invoices = [...by.keys()].sort((a, b) => a - b).map(ym => {
       const total = by.get(ym);
       const settled = Finance.invoiceDue(c, ym) < today;
-      const pay = settled ? total : Math.min(left, total);
-      if (!settled) left -= pay;
+      let pay;
+      if (total <= 0) { pay = total; left += -total; } // fatura zerada/credora: o crédito abate as próximas
+      else if (settled) pay = total;
+      else { pay = Math.min(left, total); left -= pay; }
       const close = Finance.invoiceClose(c, ym);
       openSum += total - pay;
       return { ym, total, paid: pay, open: total - pay, close, due: Finance.invoiceDue(c, ym), closed: today > close };
@@ -176,6 +180,14 @@ export const Finance = {
     const used = openSum;
     const current = invoices.find(i => i.open > 0 && i.closed) || invoices.find(i => i.open > 0 && !i.closed) || null;
     return { used, available: Math.max(0, c.limit - used), credit: Math.max(0, left), invoices, current };
+  },
+  /** Soma calculada de uma fatura (compras − estornos), sem ajuste. [ymS] no formato AAAA-MM. */
+  invoiceTotal(s, c, ymS) {
+    const ym = parseYm(ymS);
+    if (ym == null) return 0;
+    let total = 0;
+    for (const x of s.txs) if (x.cardId === c.id && Finance.invoiceYm(c, x.date) === ym) total += x.kind === 'income' ? -x.value : x.value;
+    return total;
   },
 
   // ---- saldos
@@ -305,15 +317,15 @@ export const Ops = {
   /** d: {kind, desc, value, category, date, paid, accountId, cardId, reps, repsMode:'TOTAL'|'EACH', recurring} */
   saveTx(s, editId, d) {
     const desc = clean(d.desc, 200), value = Money.parse(d.value);
-    const isC = d.kind === 'expense' && !!d.cardId;
+    const hasCard = !!d.cardId;
     if (!desc) return err('Informe uma descrição.', 'Campo obrigatório');
     if (value == null || value <= 0) return err('Informe um valor maior que zero. Ex.: 59,90', 'Valor inválido');
     if (!validDate(d.date)) return err('Informe uma data válida.', 'Data inválida');
-    if (isC && !card(s, d.cardId)) return err('Cadastre um cartão em Ajustes antes de lançar no cartão.', 'Sem cartão');
+    if (hasCard && !card(s, d.cardId)) return err('Cadastre um cartão em Ajustes antes de lançar no cartão.', 'Sem cartão');
     const accountId = account(s, d.accountId) ? d.accountId : s.accounts[0].id;
     const category = blank(d.category) ? catsOf(s, d.kind)[0] : d.category;
-    const cardId = isC ? d.cardId : '';
-    const paid = isC || !!d.paid;
+    const cardId = hasCard ? d.cardId : '';
+    const paid = !!cardId || !!d.paid;
     if (editId != null) {
       const t = s.txs.find(x => x.id === editId);
       if (!t) return err('Lançamento não encontrado.');
@@ -329,7 +341,7 @@ export const Ops = {
       const values = d.repsMode === 'EACH' ? Array(n).fill(value) : Finance.splitInstallments(value, n);
       if (values.some(v => v <= 0)) return err('O valor é pequeno demais para tantas parcelas.', 'Valor inválido');
       const group = newId();
-      added = values.map((v, i) => ({ ...base, id: newId(), value: v, date: plusMonths(d.date, i), paid: isC || (i === 0 && !!d.paid),
+      added = values.map((v, i) => ({ ...base, id: newId(), value: v, date: plusMonths(d.date, i), paid: !!cardId || (i === 0 && !!d.paid),
         desc: `${desc} (${i + 1}/${n})`, groupId: group, parcelN: i + 1, parcelTotal: n }));
     } else added = [base];
     let rec = s.recurring;
@@ -386,6 +398,21 @@ export const Ops = {
     if (c == null || d == null || c < 1 || c > 31 || d < 1 || d > 31) return err('Os dias de fechamento e vencimento devem estar entre 1 e 31.');
     if (id == null) return ok({ ...s, cards: [...s.cards, { id: newId(), name: n, limit: lim, close: c, due: d }] });
     return ok({ ...s, cards: s.cards.map(x => x.id === id ? { ...x, name: n, limit: lim, close: c, due: d } : x) });
+  },
+  /** Fixa o valor de uma fatura no valor fechado do banco (AAAA-MM). Vazio — ou igual ao calculado — remove o ajuste. */
+  adjustInvoice(s, cardId, ymS, value) {
+    const c = card(s, cardId);
+    if (!c) return err('Cartão não encontrado.');
+    if (!YM_RE.test(String(ymS))) return err('Mês inválido.');
+    const adj = { ...(c.adjust || {}) };
+    if (blank(value)) delete adj[ymS];
+    else {
+      const v = Money.parse(value);
+      if (v == null) return err('Valor inválido.');
+      if (v === Finance.invoiceTotal(s, c, ymS)) delete adj[ymS];
+      else adj[ymS] = v;
+    }
+    return ok({ ...s, cards: s.cards.map(x => x.id === cardId ? { ...x, adjust: adj } : x) });
   },
   deleteCard(s, id) {
     if (s.txs.some(t => t.cardId === id || t.cardPayment === id)) return err('Este cartão tem compras ou pagamentos registrados. Exclua esses lançamentos antes de excluir o cartão.', 'Cartão em uso');
@@ -526,7 +553,9 @@ export function normalize(raw) {
   const cards = [];
   if (Array.isArray(raw.cards)) for (const x of raw.cards) {
     if (!isObj(x) || !str(x.name, 40)) { d.cards++; continue; }
-    cards.push({ id: idFor(x.id), name: str(x.name, 40), limit: Math.max(0, cents(x.limit)), close: intIn(x.close, 1, 31, 5), due: intIn(x.due, 1, 31, 12) });
+    const adjust = {};
+    if (isObj(x.adjust)) for (const [k, v] of Object.entries(x.adjust)) { const n = typeof v === 'boolean' ? null : num(v); if (YM_RE.test(k) && n != null && Math.abs(n) <= MAX_ABS_CENTS / 100) adjust[k] = Money.fromReais(n); }
+    cards.push({ id: idFor(x.id), name: str(x.name, 40), limit: Math.max(0, cents(x.limit)), close: intIn(x.close, 1, 31, 5), due: intIn(x.due, 1, 31, 12), adjust });
   }
   const cardIds = new Set(cards.map(c => c.id));
   const cardOf = v => { const s = str(v, 48); return cardIds.has(s) ? s : ''; };
@@ -545,7 +574,7 @@ export function normalize(raw) {
   for (const o of raw.txs) {
     const kind = isObj(o) ? kindOf(o.kind) : null, value = isObj(o) ? cents(o.value) : 0, date = isObj(o) ? parseDate(o.date) : null;
     if (!isObj(o) || !kind || value <= 0 || !date) { d.txs++; continue; }
-    const cardId = kind === 'expense' ? cardOf(o.cardId) : '';
+    const cardId = cardOf(o.cardId); // receita no cartão = estorno (crédito na fatura)
     const cardPayment = kind === 'expense' && !cardId ? cardOf(o.cardPayment) : '';
     const p = isObj(o.parcel) ? o.parcel : null;
     const pTotal = p ? intIn(p.total, 1, 120, 0) : 0, pN = p ? intIn(p.n, 1, 120, 0) : 0;
@@ -603,7 +632,8 @@ export function toJson(s, meta) {
     }),
     goals: s.goals.map(g => ({ id: g.id, name: g.name, target: R(g.target), saved: R(g.saved), deadline: g.deadline || '', monthly: R(g.monthly) })),
     accounts: s.accounts.map(a => ({ id: a.id, name: a.name, initial: R(a.initial) })),
-    cards: s.cards.map(c => ({ id: c.id, name: c.name, limit: R(c.limit), close: c.close, due: c.due })),
+    cards: s.cards.map(c => ({ id: c.id, name: c.name, limit: R(c.limit), close: c.close, due: c.due,
+      adjust: Object.fromEntries(Object.entries(c.adjust || {}).map(([k, v]) => [k, R(v)])) })),
     recurring: s.recurring.map(r => ({ id: r.id, kind: r.kind, desc: r.desc, value: R(r.value), category: r.category, accountId: r.accountId,
       cardId: r.cardId, day: r.day, active: r.active, start: r.start || '', last: r.last != null ? ymStr(r.last) : '' })),
     cats: { expense: s.cats.expense, income: s.cats.income },

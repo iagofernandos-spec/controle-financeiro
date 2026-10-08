@@ -242,6 +242,7 @@ const ACTIONS = {
   'new-account': () => E.accountEditor(), 'edit-account': el => E.accountEditor(el.dataset.id),
   'new-card': () => E.cardEditor(), 'edit-card': el => E.cardEditor(el.dataset.id),
   'pay-invoice': el => E.payInvoiceEditor(el.dataset.id),
+  'adjust-invoice': el => E.adjustInvoiceEditor(el.dataset.id),
   'new-recurring': () => E.recurringEditor(), 'edit-recurring': el => E.recurringEditor(el.dataset.id),
   'new-limit': () => E.limitEditor(), 'edit-limit': el => E.limitEditor(el.dataset.cat),
   go: el => ctx.go(el.dataset.view, { fold: el.dataset.fold, focus: el.dataset.focus }),

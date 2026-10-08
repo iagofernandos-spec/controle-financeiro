@@ -3,7 +3,7 @@
 //
 // Editores (folhas): lançamento, meta, conta, cartão, pagamento de fatura, recorrência e limite;
 // relatório em PDF; categorias; PIN; atalhos. Validações e mensagens vêm de Ops (core.js).
-import { Ops, Finance, Money, account, card, brDate, brMonthLabel, toJson, BACKUP_VERSION, Csv, parseBackup, BackupError, newState, ymOf, CARD_PAYMENT_CAT } from './core.js';
+import { Ops, Finance, Money, account, card, brDate, brMonthLabel, ymStr, toJson, BACKUP_VERSION, Csv, parseBackup, BackupError, newState, ymOf, CARD_PAYMENT_CAT } from './core.js';
 import { Categorizer } from './assist.js';
 import { buildReport, preset, PRESETS, reportFileName } from './report.js';
 import { renderPdf } from './pdf.js';
@@ -53,6 +53,7 @@ export function txEditor(kind = 'expense', id = null) {
     ${field('Categoria', select('category', cats(k).map(c => [c, c]), t?.category ?? s.cats[k][0]))}
     <div id="payModeWrap">${field('Forma de pagamento', select('payMode', [['account', 'Conta / dinheiro'], ['card', 'Cartão de crédito']], t?.cardId ? 'card' : 'account'))}</div>
     <div id="cardWrap">${field('Cartão', select('cardId', s.cards.map(c => [c.id, c.name]), t?.cardId || s.cards[0]?.id || ''))}</div>
+    <div id="estornoHint" hidden><p class="infoBox">${icon('credit-card', 18)}<span>Estorno: vira um crédito na fatura do cartão e reduz o valor dela.</span></p></div>
     <div id="accWrap">${field(isPayment ? 'Pago com a conta' : 'Conta', select('accountId', s.accounts.map(a => [a.id, a.name]), t?.accountId ?? s.accounts[0].id))}</div>
     ${field('Data', input('date', t?.date ?? today(), { type: 'date', required: true }))}
     <div id="paidWrap">${check('paid', '', t ? t.paid : true)}</div>
@@ -65,13 +66,16 @@ export function txEditor(kind = 'expense', id = null) {
   const categorizers = {};
   const sug = () => ctx.device.assistCategory && !isPayment ? (categorizers[k] ??= new Categorizer(s, k, ctx.dict)) : null;
   const sync = () => {
-    const canCard = k === 'expense' && s.cards.length > 0 && !isPayment;
+    const canCard = s.cards.length > 0 && !isPayment;
     const useCard = canCard && f.payMode.value === 'card';
     d.querySelector('#payModeWrap').hidden = !canCard;
     d.querySelector('#cardWrap').hidden = !useCard;
     d.querySelector('#accWrap').hidden = useCard;
     d.querySelector('#paidWrap').hidden = useCard || isPayment;
     d.querySelector('#paidWrap b').textContent = k === 'income' ? 'Receita já recebida' : 'Despesa já paga';
+    const cardOpt = d.querySelector('#payModeWrap option[value="card"]');
+    if (cardOpt) cardOpt.textContent = k === 'income' ? 'Estorno no cartão (crédito na fatura)' : 'Cartão de crédito';
+    d.querySelector('#estornoHint').hidden = !(k === 'income' && useCard);
     const r = d.querySelector('#repsModeWrap');
     if (r) r.hidden = !(parseInt(f.reps.value, 10) > 1);
   };
@@ -99,7 +103,7 @@ export function txEditor(kind = 'expense', id = null) {
   f.category.onchange = hint;
   sync();
   guard(f, v => {
-    const useCard = k === 'expense' && s.cards.length > 0 && !isPayment && v.payMode === 'card';
+    const useCard = s.cards.length > 0 && !isPayment && v.payMode === 'card';
     const draft = { kind: k, desc: v.desc, value: v.value, category: v.category, date: v.date, paid: !!f.paid.checked, accountId: v.accountId,
       cardId: useCard ? v.cardId : '', reps: parseInt(v.reps || '1', 10) || 1, repsMode: v.repsMode || 'TOTAL', recurring: !!f.recurring?.checked };
     apply(Ops.saveTx(ctx.state, t?.id ?? null, draft), t ? 'Lançamento atualizado' : 'Lançamento salvo');
@@ -168,6 +172,34 @@ export function payInvoiceEditor(cardId) {
     ${field('Data do pagamento', input('date', today(), { type: 'date' }))}${actions('Registrar pagamento')}</form>`;
   const d = openSheet({ title: `Pagar fatura · ${c.name}`, subtitle: `Fatura de ${brMonthLabel(cur.ym)} · vence ${brDate(cur.due)} · em aberto ${money(cur.open)}`, body });
   guard(d.querySelector('#f'), v => apply(Ops.payInvoice(ctx.state, c.id, v.value, v.accountId, v.date), 'Pagamento registrado'));
+}
+
+/** Ajusta o valor de uma fatura para o valor fechado do banco, sem mexer nos lançamentos. */
+export function adjustInvoiceEditor(cardId) {
+  const s = ctx.state, c = card(s, cardId);
+  if (!c) return;
+  const st = Finance.cardStatus(s, c, today());
+  if (!st.invoices.length) return notice('Faturas', 'Este cartão ainda não tem faturas para ajustar.');
+  const months = st.invoices.map(i => i.ym);
+  const cur = ymOf(today());
+  if (cur > months[months.length - 1]) months.push(cur);
+  const adjOf = m => (c.adjust || {})[ymStr(m)];
+  const eff = m => adjOf(m) ?? Finance.invoiceTotal(s, c, ymStr(m));
+  const first = st.current ? st.current.ym : months[months.length - 1];
+  const body = `<form id="f" novalidate>${field('Fatura', select('ym', months.map(m => [ymStr(m), `${brMonthLabel(m)}${adjOf(m) != null ? ' (ajustada)' : ''}`]), ymStr(first)))}
+    <div id="calcInfo"></div>
+    ${field('Valor da fatura (R$)', moneyInput('value', Money.input(eff(first))))}
+    <p class="muted small">Use para igualar a fatura ao valor fechado do banco. Os lançamentos continuam salvos — só o total desta fatura muda. Informe o valor calculado para voltar ao normal.</p>
+    ${actions('Salvar valor')}</form>`;
+  const d = openSheet({ title: `Ajustar fatura · ${c.name}`, subtitle: 'Sem perder o que já foi lançado', body });
+  const f = d.querySelector('#f');
+  const info = () => {
+    const m = months.find(x => ymStr(x) === f.ym.value), a = m != null ? adjOf(m) : null;
+    d.querySelector('#calcInfo').innerHTML = `<p class="muted small">Calculado pelos lançamentos: <b>${money(Finance.invoiceTotal(s, c, f.ym.value))}</b>${a != null ? ` · valor ajustado: <b>${money(a)}</b>` : ''}</p>`;
+  };
+  f.ym.onchange = () => { const m = months.find(x => ymStr(x) === f.ym.value); f.value.value = Money.input(eff(m)); info(); };
+  info();
+  guard(f, v => apply(Ops.adjustInvoice(ctx.state, c.id, v.ym, v.value), 'Valor da fatura salvo'));
 }
 
 // ------------------------------------------------------------------ recorrência
@@ -590,6 +622,7 @@ export function shortcutsDialog() {
 }
 export function whatsNew() {
   const items = [
+    '1.0.3 — estorno no cartão (lance como Receita com a forma de pagamento "Estorno no cartão", que vira crédito na fatura) e botão "Ajustar" para fixar o valor fechado de uma fatura sem perder os lançamentos.',
     '1.0.2 — faturas de cartão pelas datas: a compra entra na fatura pelo fechamento e o vencimento define o que está em aberto; faturas já vencidas são consideradas pagas automaticamente (compras parceladas antigas não ficam mais em atraso).',
     '1.0.1 — a sincronização da nuvem se reconecta sozinha, sem precisar de F5, e o login do Google foi corrigido.',
     '1.0.0 — primeiro lançamento do Controle Financeiro.',

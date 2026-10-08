@@ -223,7 +223,7 @@
     txs: s.txs.map((t) => ({ ...t })),
     goals: s.goals.map((g) => ({ ...g })),
     accounts: s.accounts.map((a) => ({ ...a })),
-    cards: s.cards.map((c) => ({ ...c })),
+    cards: s.cards.map((c) => ({ ...c, adjust: { ...c.adjust || {} } })),
     recurring: s.recurring.map((r) => ({ ...r })),
     cats: { expense: [...s.cats.expense], income: [...s.cats.income] },
     limits: new Map(s.limits)
@@ -242,15 +242,20 @@
     invoiceClose: (c, ym) => ymDay(ym, c.close),
     /** Limite usado inclui parcelas futuras. A lógica segue as datas: o lançamento da compra define
      *  a fatura (pelo fechamento) e o vencimento define o que ainda está em aberto — faturas já
-     *  vencidas (vencimento antes de hoje) são consideradas pagas. Pagamentos abatem as faturas em
-     *  aberto (mais antiga primeiro); um pagamento feito para fatura já vencida fica com ela. */
+     *  vencidas (vencimento antes de hoje) são consideradas pagas. Estornos (receita no cartão)
+     *  reduzem a fatura e `c.adjust` fixa o valor fechado de uma fatura específica. Pagamentos abatem
+     *  as faturas em aberto (mais antiga primeiro); um pagamento feito para fatura já vencida fica com ela. */
     cardStatus(s, c, today2) {
-      const purchases = s.txs.filter((t) => t.cardId === c.id && t.kind === "expense");
+      const purchases = s.txs.filter((t) => t.cardId === c.id);
       const payments = s.txs.filter((t) => t.cardPayment === c.id && t.paid);
       const by = /* @__PURE__ */ new Map();
       for (const p of purchases) {
         const k = Finance.invoiceYm(c, p.date);
-        by.set(k, (by.get(k) || 0) + p.value);
+        by.set(k, (by.get(k) || 0) + (p.kind === "income" ? -p.value : p.value));
+      }
+      for (const [k, v] of Object.entries(c.adjust || {})) {
+        const m = parseYm(k);
+        if (m != null) by.set(m, v);
       }
       const targetYm = (d) => {
         const y0 = ymOf(d);
@@ -262,8 +267,15 @@
       const invoices = [...by.keys()].sort((a, b) => a - b).map((ym) => {
         const total = by.get(ym);
         const settled = Finance.invoiceDue(c, ym) < today2;
-        const pay = settled ? total : Math.min(left, total);
-        if (!settled) left -= pay;
+        let pay;
+        if (total <= 0) {
+          pay = total;
+          left += -total;
+        } else if (settled) pay = total;
+        else {
+          pay = Math.min(left, total);
+          left -= pay;
+        }
         const close = Finance.invoiceClose(c, ym);
         openSum += total - pay;
         return { ym, total, paid: pay, open: total - pay, close, due: Finance.invoiceDue(c, ym), closed: today2 > close };
@@ -271,6 +283,14 @@
       const used = openSum;
       const current = invoices.find((i) => i.open > 0 && i.closed) || invoices.find((i) => i.open > 0 && !i.closed) || null;
       return { used, available: Math.max(0, c.limit - used), credit: Math.max(0, left), invoices, current };
+    },
+    /** Soma calculada de uma fatura (compras − estornos), sem ajuste. [ymS] no formato AAAA-MM. */
+    invoiceTotal(s, c, ymS) {
+      const ym = parseYm(ymS);
+      if (ym == null) return 0;
+      let total = 0;
+      for (const x of s.txs) if (x.cardId === c.id && Finance.invoiceYm(c, x.date) === ym) total += x.kind === "income" ? -x.value : x.value;
+      return total;
     },
     // ---- saldos
     accountBalance: (s, a) => a.initial + s.txs.filter((t) => t.accountId === a.id && !isCard(t) && t.paid).reduce((n, t) => t.kind === "income" ? n + t.value : n - t.value, 0),
@@ -417,15 +437,15 @@
     /** d: {kind, desc, value, category, date, paid, accountId, cardId, reps, repsMode:'TOTAL'|'EACH', recurring} */
     saveTx(s, editId, d) {
       const desc = clean(d.desc, 200), value = Money.parse(d.value);
-      const isC = d.kind === "expense" && !!d.cardId;
+      const hasCard = !!d.cardId;
       if (!desc) return err("Informe uma descrição.", "Campo obrigatório");
       if (value == null || value <= 0) return err("Informe um valor maior que zero. Ex.: 59,90", "Valor inválido");
       if (!validDate(d.date)) return err("Informe uma data válida.", "Data inválida");
-      if (isC && !card(s, d.cardId)) return err("Cadastre um cartão em Ajustes antes de lançar no cartão.", "Sem cartão");
+      if (hasCard && !card(s, d.cardId)) return err("Cadastre um cartão em Ajustes antes de lançar no cartão.", "Sem cartão");
       const accountId = account(s, d.accountId) ? d.accountId : s.accounts[0].id;
       const category = blank(d.category) ? catsOf(s, d.kind)[0] : d.category;
-      const cardId = isC ? d.cardId : "";
-      const paid = isC || !!d.paid;
+      const cardId = hasCard ? d.cardId : "";
+      const paid = !!cardId || !!d.paid;
       if (editId != null) {
         const t = s.txs.find((x) => x.id === editId);
         if (!t) return err("Lançamento não encontrado.");
@@ -445,7 +465,7 @@
           id: newId(),
           value: v,
           date: plusMonths(d.date, i),
-          paid: isC || i === 0 && !!d.paid,
+          paid: !!cardId || i === 0 && !!d.paid,
           desc: `${desc} (${i + 1}/${n})`,
           groupId: group,
           parcelN: i + 1,
@@ -507,6 +527,21 @@
       if (c == null || d == null || c < 1 || c > 31 || d < 1 || d > 31) return err("Os dias de fechamento e vencimento devem estar entre 1 e 31.");
       if (id == null) return ok({ ...s, cards: [...s.cards, { id: newId(), name: n, limit: lim, close: c, due: d }] });
       return ok({ ...s, cards: s.cards.map((x) => x.id === id ? { ...x, name: n, limit: lim, close: c, due: d } : x) });
+    },
+    /** Fixa o valor de uma fatura no valor fechado do banco (AAAA-MM). Vazio — ou igual ao calculado — remove o ajuste. */
+    adjustInvoice(s, cardId, ymS, value) {
+      const c = card(s, cardId);
+      if (!c) return err("Cartão não encontrado.");
+      if (!YM_RE.test(String(ymS))) return err("Mês inválido.");
+      const adj = { ...c.adjust || {} };
+      if (blank(value)) delete adj[ymS];
+      else {
+        const v = Money.parse(value);
+        if (v == null) return err("Valor inválido.");
+        if (v === Finance.invoiceTotal(s, c, ymS)) delete adj[ymS];
+        else adj[ymS] = v;
+      }
+      return ok({ ...s, cards: s.cards.map((x) => x.id === cardId ? { ...x, adjust: adj } : x) });
     },
     deleteCard(s, id) {
       if (s.txs.some((t) => t.cardId === id || t.cardPayment === id)) return err("Este cartão tem compras ou pagamentos registrados. Exclua esses lançamentos antes de excluir o cartão.", "Cartão em uso");
@@ -696,7 +731,12 @@
         d.cards++;
         continue;
       }
-      cards.push({ id: idFor(x.id), name: str(x.name, 40), limit: Math.max(0, cents(x.limit)), close: intIn(x.close, 1, 31, 5), due: intIn(x.due, 1, 31, 12) });
+      const adjust = {};
+      if (isObj(x.adjust)) for (const [k, v] of Object.entries(x.adjust)) {
+        const n = typeof v === "boolean" ? null : num(v);
+        if (YM_RE.test(k) && n != null && Math.abs(n) <= MAX_ABS_CENTS / 100) adjust[k] = Money.fromReais(n);
+      }
+      cards.push({ id: idFor(x.id), name: str(x.name, 40), limit: Math.max(0, cents(x.limit)), close: intIn(x.close, 1, 31, 5), due: intIn(x.due, 1, 31, 12), adjust });
     }
     const cardIds = new Set(cards.map((c) => c.id));
     const cardOf = (v) => {
@@ -732,7 +772,7 @@
         d.txs++;
         continue;
       }
-      const cardId = kind === "expense" ? cardOf(o.cardId) : "";
+      const cardId = cardOf(o.cardId);
       const cardPayment = kind === "expense" && !cardId ? cardOf(o.cardPayment) : "";
       const p = isObj(o.parcel) ? o.parcel : null;
       const pTotal = p ? intIn(p.total, 1, 120, 0) : 0, pN = p ? intIn(p.n, 1, 120, 0) : 0;
@@ -811,7 +851,14 @@
       }),
       goals: s.goals.map((g) => ({ id: g.id, name: g.name, target: R(g.target), saved: R(g.saved), deadline: g.deadline || "", monthly: R(g.monthly) })),
       accounts: s.accounts.map((a) => ({ id: a.id, name: a.name, initial: R(a.initial) })),
-      cards: s.cards.map((c) => ({ id: c.id, name: c.name, limit: R(c.limit), close: c.close, due: c.due })),
+      cards: s.cards.map((c) => ({
+        id: c.id,
+        name: c.name,
+        limit: R(c.limit),
+        close: c.close,
+        due: c.due,
+        adjust: Object.fromEntries(Object.entries(c.adjust || {}).map(([k, v]) => [k, R(v)]))
+      })),
       recurring: s.recurring.map((r) => ({
         id: r.id,
         kind: r.kind,
@@ -2991,7 +3038,7 @@ Public License instead of this License.  But first, please read
   var why = (text) => `<details class="why"><summary>${icon("help", 16)}<span>Por quê?</span></summary><p>${esc(text)}</p></details>`;
 
   // js/ctx.js
-  var APP_VERSION = "1.0.2";
+  var APP_VERSION = "1.0.3";
   var ctx = {
     state: null,
     // dados (AppState do core)
@@ -3812,7 +3859,7 @@ ${xref}
       <b>${cur ? money(cur.open) : money(0)}</b>
       <span class="sub">${cur ? `Fatura ${esc(brMonthLabel(cur.ym))} · vence ${brDayMonth(cur.due)}${cur.closed ? " · fechada" : ""}` : "Sem fatura em aberto"}</span>
       <span class="sub">Disponível ${money(st.available)}</span>
-      <div class="cardActions">${cur ? btn("Pagar fatura", { act: "pay-invoice", data: { id: c.id }, cls: "primary small" }) : ""}${btn("", { act: "edit-card", data: { id: c.id }, cls: "icon tiny", icon: "edit", iconSize: 16, label: `Editar cartão ${c.name}` })}</div></div>`;
+      <div class="cardActions">${cur ? btn("Pagar fatura", { act: "pay-invoice", data: { id: c.id }, cls: "primary small" }) : ""}${st.invoices.length ? btn("Ajustar", { act: "adjust-invoice", data: { id: c.id }, cls: "soft small", icon: "edit_note", iconSize: 15, label: `Ajustar fatura de ${c.name}` }) : ""}${btn("", { act: "edit-card", data: { id: c.id }, cls: "icon tiny", icon: "edit", iconSize: 16, label: `Editar cartão ${c.name}` })}</div></div>`;
     }).join("");
     return `<section class="section">${sectionHead("Patrimônio", "Contas e cartões", btn("Gerenciar", { act: "go", data: { view: "prefs", fold: "contas" }, cls: "soft small" }))}
     <div class="${ctx.cols === 1 ? "hscroll" : "walletGrid"}">${accs}${cards}</div></section>`;
@@ -3907,7 +3954,7 @@ ${xref}
     const late = !t.paid && !cardT && t.date < ctx.today;
     const status = payment ? "Pagamento de fatura" : cardT ? "" : t.paid ? "" : late ? '<span class="red">Em atraso</span>' : t.kind === "income" ? "A receber" : "A pagar";
     const meta = [esc(t.category), esc(where), brDate(t.date), status].filter(Boolean).join(" · ");
-    const toggle = cardT ? `<span class="chk card" title="Compra no cartão">${icon("credit-card", 16)}</span>` : payment ? `<span class="chk on" title="Pagamento de fatura">${icon("check", 16)}</span>` : `<button type="button" class="chk${t.paid ? " on" : ""}" data-act="toggle-paid" data-id="${attr(t.id)}" aria-pressed="${t.paid}" aria-label="${t.paid ? t.kind === "income" ? "Recebido" : "Pago" : t.kind === "income" ? "Marcar como recebido" : "Marcar como pago"}: ${attr(t.desc)}">${icon("check", 16)}</button>`;
+    const toggle = cardT ? `<span class="chk card" title="${t.kind === "income" ? "Estorno no cartão" : "Compra no cartão"}">${icon("credit-card", 16)}</span>` : payment ? `<span class="chk on" title="Pagamento de fatura">${icon("check", 16)}</span>` : `<button type="button" class="chk${t.paid ? " on" : ""}" data-act="toggle-paid" data-id="${attr(t.id)}" aria-pressed="${t.paid}" aria-label="${t.paid ? t.kind === "income" ? "Recebido" : "Pago" : t.kind === "income" ? "Marcar como recebido" : "Marcar como pago"}: ${attr(t.desc)}">${icon("check", 16)}</button>`;
     return `<div class="tx ${t.kind}${t.paid ? "" : " pending"}${payment ? " payment" : ""}" data-act="edit-tx" data-id="${attr(t.id)}" role="button" tabindex="0" aria-label="${attr(t.desc)}, ${t.kind === "income" ? "receita" : "despesa"} de ${attr(money(t.value))} em ${brDate(t.date)}">
     ${glyph(t.category)}<span class="meta"><b>${esc(t.desc)}</b><small>${meta}</small></span>
     <span class="amount">${t.kind === "income" ? "+" : "−"}${money(t.value)}</span>${toggle}</div>`;
@@ -4225,6 +4272,7 @@ Este programa é distribuído na esperança de que seja útil, mas SEM NENHUMA G
     CARD_PAYMENT_CAT: () => CARD_PAYMENT_CAT,
     SHORTCUTS: () => SHORTCUTS,
     accountEditor: () => accountEditor,
+    adjustInvoiceEditor: () => adjustInvoiceEditor,
     cardEditor: () => cardEditor,
     cloudActivate: () => cloudActivate,
     cloudDisconnect: () => cloudDisconnect,
@@ -4580,6 +4628,7 @@ Este programa é distribuído na esperança de que seja útil, mas SEM NENHUMA G
     ${field("Categoria", select("category", cats(k).map((c) => [c, c]), t?.category ?? s.cats[k][0]))}
     <div id="payModeWrap">${field("Forma de pagamento", select("payMode", [["account", "Conta / dinheiro"], ["card", "Cartão de crédito"]], t?.cardId ? "card" : "account"))}</div>
     <div id="cardWrap">${field("Cartão", select("cardId", s.cards.map((c) => [c.id, c.name]), t?.cardId || s.cards[0]?.id || ""))}</div>
+    <div id="estornoHint" hidden><p class="infoBox">${icon("credit-card", 18)}<span>Estorno: vira um crédito na fatura do cartão e reduz o valor dela.</span></p></div>
     <div id="accWrap">${field(isPayment ? "Pago com a conta" : "Conta", select("accountId", s.accounts.map((a) => [a.id, a.name]), t?.accountId ?? s.accounts[0].id))}</div>
     ${field("Data", input("date", t?.date ?? today(), { type: "date", required: true }))}
     <div id="paidWrap">${check("paid", "", t ? t.paid : true)}</div>
@@ -4592,13 +4641,16 @@ Este programa é distribuído na esperança de que seja útil, mas SEM NENHUMA G
     const categorizers = {};
     const sug = () => ctx.device.assistCategory && !isPayment ? categorizers[k] ?? (categorizers[k] = new Categorizer(s, k, ctx.dict)) : null;
     const sync = () => {
-      const canCard = k === "expense" && s.cards.length > 0 && !isPayment;
+      const canCard = s.cards.length > 0 && !isPayment;
       const useCard = canCard && f.payMode.value === "card";
       d.querySelector("#payModeWrap").hidden = !canCard;
       d.querySelector("#cardWrap").hidden = !useCard;
       d.querySelector("#accWrap").hidden = useCard;
       d.querySelector("#paidWrap").hidden = useCard || isPayment;
       d.querySelector("#paidWrap b").textContent = k === "income" ? "Receita já recebida" : "Despesa já paga";
+      const cardOpt = d.querySelector('#payModeWrap option[value="card"]');
+      if (cardOpt) cardOpt.textContent = k === "income" ? "Estorno no cartão (crédito na fatura)" : "Cartão de crédito";
+      d.querySelector("#estornoHint").hidden = !(k === "income" && useCard);
       const r = d.querySelector("#repsModeWrap");
       if (r) r.hidden = !(parseInt(f.reps.value, 10) > 1);
     };
@@ -4639,7 +4691,7 @@ Este programa é distribuído na esperança de que seja útil, mas SEM NENHUMA G
     f.category.onchange = hint;
     sync();
     guard(f, (v) => {
-      const useCard = k === "expense" && s.cards.length > 0 && !isPayment && v.payMode === "card";
+      const useCard = s.cards.length > 0 && !isPayment && v.payMode === "card";
       const draft = {
         kind: k,
         desc: v.desc,
@@ -4729,6 +4781,36 @@ Este programa é distribuído na esperança de que seja útil, mas SEM NENHUMA G
     ${field("Data do pagamento", input("date", today(), { type: "date" }))}${actions("Registrar pagamento")}</form>`;
     const d = openSheet({ title: `Pagar fatura · ${c.name}`, subtitle: `Fatura de ${brMonthLabel(cur.ym)} · vence ${brDate(cur.due)} · em aberto ${money(cur.open)}`, body });
     guard(d.querySelector("#f"), (v) => apply(Ops.payInvoice(ctx.state, c.id, v.value, v.accountId, v.date), "Pagamento registrado"));
+  }
+  function adjustInvoiceEditor(cardId) {
+    const s = ctx.state, c = card(s, cardId);
+    if (!c) return;
+    const st = Finance.cardStatus(s, c, today());
+    if (!st.invoices.length) return notice("Faturas", "Este cartão ainda não tem faturas para ajustar.");
+    const months = st.invoices.map((i) => i.ym);
+    const cur = ymOf(today());
+    if (cur > months[months.length - 1]) months.push(cur);
+    const adjOf = (m) => (c.adjust || {})[ymStr(m)];
+    const eff = (m) => adjOf(m) ?? Finance.invoiceTotal(s, c, ymStr(m));
+    const first = st.current ? st.current.ym : months[months.length - 1];
+    const body = `<form id="f" novalidate>${field("Fatura", select("ym", months.map((m) => [ymStr(m), `${brMonthLabel(m)}${adjOf(m) != null ? " (ajustada)" : ""}`]), ymStr(first)))}
+    <div id="calcInfo"></div>
+    ${field("Valor da fatura (R$)", moneyInput("value", Money.input(eff(first))))}
+    <p class="muted small">Use para igualar a fatura ao valor fechado do banco. Os lançamentos continuam salvos — só o total desta fatura muda. Informe o valor calculado para voltar ao normal.</p>
+    ${actions("Salvar valor")}</form>`;
+    const d = openSheet({ title: `Ajustar fatura · ${c.name}`, subtitle: "Sem perder o que já foi lançado", body });
+    const f = d.querySelector("#f");
+    const info = () => {
+      const m = months.find((x) => ymStr(x) === f.ym.value), a = m != null ? adjOf(m) : null;
+      d.querySelector("#calcInfo").innerHTML = `<p class="muted small">Calculado pelos lançamentos: <b>${money(Finance.invoiceTotal(s, c, f.ym.value))}</b>${a != null ? ` · valor ajustado: <b>${money(a)}</b>` : ""}</p>`;
+    };
+    f.ym.onchange = () => {
+      const m = months.find((x) => ymStr(x) === f.ym.value);
+      f.value.value = Money.input(eff(m));
+      info();
+    };
+    info();
+    guard(f, (v) => apply(Ops.adjustInvoice(ctx.state, c.id, v.ym, v.value), "Valor da fatura salvo"));
   }
   function recurringEditor(id = null) {
     const s = ctx.state, r = id ? s.recurring.find((x) => x.id === id) : null;
@@ -5244,6 +5326,7 @@ ${bad} item(ns) inválido(s) será(ão) ignorado(s).` : "") + "\nSubstituir os d
   }
   function whatsNew() {
     const items = [
+      '1.0.3 — estorno no cartão (lance como Receita com a forma de pagamento "Estorno no cartão", que vira crédito na fatura) e botão "Ajustar" para fixar o valor fechado de uma fatura sem perder os lançamentos.',
       "1.0.2 — faturas de cartão pelas datas: a compra entra na fatura pelo fechamento e o vencimento define o que está em aberto; faturas já vencidas são consideradas pagas automaticamente (compras parceladas antigas não ficam mais em atraso).",
       "1.0.1 — a sincronização da nuvem se reconecta sozinha, sem precisar de F5, e o login do Google foi corrigido.",
       "1.0.0 — primeiro lançamento do Controle Financeiro.",
@@ -5583,6 +5666,7 @@ ${bad} item(ns) inválido(s) será(ão) ignorado(s).` : "") + "\nSubstituir os d
       const value = icents(v.value), date = typeof v.date === "string" && validDate(v.date) ? v.date : null;
       const desc = istr(v.desc, 200);
       if (!kind || !value || !date || !desc) return null;
+      const cardId = idOf(v.cardId, 48);
       return tx({
         id,
         kind,
@@ -5590,9 +5674,9 @@ ${bad} item(ns) inválido(s) será(ão) ignorado(s).` : "") + "\nSubstituir os d
         date,
         desc,
         category: istr(v.category, 40) || "Outros",
-        paid: v.paid === true,
+        paid: cardId ? true : v.paid === true,
         accountId: idOf(v.accountId, 48) || void 0,
-        cardId: idOf(v.cardId, 48),
+        cardId,
         cardPayment: idOf(v.cardPayment, 48),
         recurringId: idOf(v.recurringId, 48),
         groupId: idOf(v.groupId, 48),
@@ -5615,7 +5699,12 @@ ${bad} item(ns) inválido(s) será(ão) ignorado(s).` : "") + "\nSubstituir os d
       const name = istr(v.name, 40);
       const limit = icents0(v.limit);
       if (!name || limit == null) return null;
-      return { id, name, limit, close: iint(v.close, 1, 31, 5), due: iint(v.due, 1, 31, 12) };
+      const adjust = {};
+      if (isObj2(v.adjust)) for (const [k, val] of Object.entries(v.adjust)) {
+        const n = imag(val);
+        if (/^\d{4}-(0[1-9]|1[0-2])$/.test(k) && n != null) adjust[k] = n;
+      }
+      return { id, name, limit, close: iint(v.close, 1, 31, 5), due: iint(v.due, 1, 31, 12), adjust };
     }
     if (col === "recurring") {
       const kind = v.kind === "income" || v.kind === "expense" ? v.kind : null;
@@ -6623,6 +6712,7 @@ ${bad} item(ns) inválido(s) será(ão) ignorado(s).` : "") + "\nSubstituir os d
     "new-card": () => cardEditor(),
     "edit-card": (el) => cardEditor(el.dataset.id),
     "pay-invoice": (el) => payInvoiceEditor(el.dataset.id),
+    "adjust-invoice": (el) => adjustInvoiceEditor(el.dataset.id),
     "new-recurring": () => recurringEditor(),
     "edit-recurring": (el) => recurringEditor(el.dataset.id),
     "new-limit": () => limitEditor(),

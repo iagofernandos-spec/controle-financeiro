@@ -102,7 +102,7 @@ test('backup: ids repetidos e referências inválidas', () => {
   assert.notEqual(a.id, b.id);
   assert.equal(a.accountId, 'main');
   assert.equal(a.cardId, '');
-  assert.equal(b.cardId, ''); // receita não vai para cartão
+  assert.equal(b.cardId, 'c'); // estorno: receita no cartão é permitida
 });
 
 test('backup: ids numéricos do Controle Financeiro web antigo e exportação', () => {
@@ -193,6 +193,48 @@ test('finanças: faturas seguem lançamento, fechamento e vencimento (vencidas =
   cs = Finance.cardStatus(s, s.cards[0], '2026-10-11');
   assert.deepEqual(cs.invoices.filter(i => i.open > 0).map(i => i.ym), [ym(2026, 11), ym(2026, 12)]);
   assert.equal(cs.used, 20000);
+});
+
+test('finanças: estorno no cartão reduz a fatura e vira crédito se sobrar', () => {
+  const s = newState({ cards: [{ id: 'c', name: 'C', limit: 100000, close: 5, due: 12 }] });
+  s.txs.push(mk('p1', 'expense', 30000, '2026-10-02', true, 'c'));
+  let cs = Finance.cardStatus(s, s.cards[0], '2026-10-03');
+  assert.equal(cs.used, 30000);
+  s.txs.push(mk('e1', 'income', 10000, '2026-10-03', true, 'c'));
+  cs = Finance.cardStatus(s, s.cards[0], '2026-10-03');
+  assert.equal(cs.invoices[0].total, 20000);
+  assert.equal(cs.used, 20000);
+  assert.equal(cs.available, 80000);
+  assert.equal(Finance.currentBalance(s), 0); // estorno não mexe no saldo da conta
+  // estorno maior que a fatura: o que sobra abate a fatura seguinte
+  s.txs.push(mk('e2', 'income', 30000, '2026-10-04', true, 'c'), mk('p2', 'expense', 10000, '2026-11-02', true, 'c'));
+  cs = Finance.cardStatus(s, s.cards[0], '2026-10-05');
+  assert.equal(cs.invoices.find(i => i.ym === ym(2026, 10)).total, -10000);
+  assert.equal(cs.invoices.find(i => i.ym === ym(2026, 11)).open, 0);
+  assert.equal(cs.used, 0);
+});
+
+test('finanças: ajuste de fatura fixa o valor fechado do banco', () => {
+  let s = newState({ cards: [{ id: 'c', name: 'C', limit: 100000, close: 5, due: 12 }] });
+  s.txs.push(mk('p1', 'expense', 30000, '2026-10-02', true, 'c'), mk('p2', 'expense', 10000, '2026-11-02', true, 'c'));
+  s = okState(Ops.adjustInvoice(s, 'c', '2026-10', '250,00'));
+  let cs = Finance.cardStatus(s, s.cards[0], '2026-10-03');
+  assert.equal(cs.invoices.find(i => i.ym === ym(2026, 10)).total, 25000); // valor do banco, não o calculado
+  assert.equal(cs.used, 35000);
+  // informar de volta o valor calculado (ou vazio) remove o ajuste
+  s = okState(Ops.adjustInvoice(s, 'c', '2026-10', '300,00'));
+  assert.deepEqual(s.cards[0].adjust, {});
+  s = okState(Ops.adjustInvoice(s, 'c', '2026-10', '250,00'));
+  s = okState(Ops.adjustInvoice(s, 'c', '2026-10', ''));
+  assert.deepEqual(s.cards[0].adjust, {});
+  // validações
+  assert.equal(fail(Ops.adjustInvoice(s, 'nope', '2026-10', '10')), 'Cartão não encontrado.');
+  assert.equal(fail(Ops.adjustInvoice(s, 'c', '2026-13', '10')), 'Mês inválido.');
+  assert.equal(fail(Ops.adjustInvoice(s, 'c', '2026-10', 'abc')), 'Valor inválido.');
+  // ida e volta no backup preserva o ajuste
+  s = okState(Ops.adjustInvoice(s, 'c', '2026-10', '250,00'));
+  const back = parseBackup(toJson(s)).state;
+  assert.equal(back.cards[0].adjust['2026-10'], 25000);
 });
 
 test('finanças: saldo previsto', () => {
@@ -308,6 +350,22 @@ test('operações: compra parcelada no cartão e pagamento da fatura', () => {
   assert.equal(s.txs.at(-1).category, CARD_PAYMENT_CAT);
   assert.equal(Finance.currentBalance(s), 90000);
   assert.match(fail(Ops.deleteCard(s, c)), /compras ou pagamentos/);
+});
+
+test('operações: estorno no cartão via saveTx (receita com cartão)', () => {
+  let s = okState(Ops.saveAccount(newState(), 'main', 'Conta', '1.000,00'));
+  s = okState(Ops.saveCard(s, null, 'Nu', '500', '5', '12'));
+  const c = s.cards[0].id;
+  s = okState(Ops.saveTx(s, null, draft({ kind: 'income', value: '50', cardId: c, category: 'Estorno' })));
+  const t = s.txs.at(-1);
+  assert.equal(t.kind, 'income');
+  assert.equal(t.cardId, c);
+  assert.equal(t.paid, true);
+  assert.equal(Finance.currentBalance(s), 100000); // não mexe no saldo da conta
+  assert.equal(Finance.cardStatus(s, s.cards[0], '2026-10-03').used, 0);
+  const back = parseBackup(toJson(s)).state; // o backup preserva o estorno
+  assert.equal(back.txs.at(-1).cardId, c);
+  assert.equal(back.txs.at(-1).kind, 'income');
 });
 
 test('operações: metas', () => {
