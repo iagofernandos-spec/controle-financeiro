@@ -2979,7 +2979,7 @@ Public License instead of this License.  But first, please read
   var why = (text) => `<details class="why"><summary>${icon("help", 16)}<span>Por quê?</span></summary><p>${esc(text)}</p></details>`;
 
   // js/ctx.js
-  var APP_VERSION = "1.2.0";
+  var APP_VERSION = "1.0.0";
   var ctx = {
     state: null,
     // dados (AppState do core)

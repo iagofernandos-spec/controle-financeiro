@@ -2,6 +2,14 @@
 
 Controle financeiro pessoal **simples, privado e offline**, no navegador do celular ou do computador. Receitas, despesas, contas, cartões e faturas, parcelas, recorrências, limites, metas, relatórios, relatório em PDF, assistente no aparelho, PIN e backup em JSON — com um **layout próprio para computador e notebook** e **nuvem opcional na sua conta Google** (login, banco de dados e duas pessoas ao mesmo tempo, com criptografia de ponta a ponta).
 
+![Início no computador](docs/inicio-computador.png)
+
+| Lançamentos | Relatórios |
+|---|---|
+| ![Lançamentos](docs/lancamentos-computador.png) | ![Relatórios](docs/relatorios-computador.png) |
+| **Assistente** | **Ajustes (tema Tokyo Night)** |
+| ![Assistente](docs/assistente-computador.png) | ![Ajustes](docs/ajustes-tokyo.png) |
+
 - Lista completa do que o app faz: [FUNCIONALIDADES.md](FUNCIONALIDADES.md)
 - Como o assistente decide cada coisa: [ASSISTENTE.md](ASSISTENTE.md)
 - O que mudou em cada versão: [CHANGELOG.md](CHANGELOG.md)
