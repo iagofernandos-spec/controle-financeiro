@@ -168,6 +168,33 @@ test('finanças: fechamento e vencimento da fatura', () => {
   assert.equal(cs.current.open, 10000);
 });
 
+test('finanças: faturas seguem lançamento, fechamento e vencimento (vencidas = pagas)', () => {
+  // cartão fecha dia 2 e vence dia 10; compra parcelada (6x) começando em 25/06/2026
+  const s = newState({ cards: [{ id: 'c', name: 'C', limit: 100000, close: 2, due: 10 }] });
+  for (let i = 0; i < 6; i++) s.txs.push(mk('p' + i, 'expense', 10000, ymDay(ym(2026, 6) + i, 25), true, 'c'));
+  // em 08/10/2026: a compra de 25/06 caiu na fatura de julho (venceu 10/07) → considerada paga
+  let cs = Finance.cardStatus(s, s.cards[0], '2026-10-08');
+  assert.deepEqual(cs.invoices.filter(i => i.open > 0).map(i => i.ym), [ym(2026, 10), ym(2026, 11), ym(2026, 12)]);
+  assert.equal(cs.used, 30000);
+  assert.equal(cs.current.ym, ym(2026, 10));
+  assert.ok(!Finance.reminders(s, '2026-10-08', 2).some(r => r.date < '2026-10-08')); // nada em atraso
+  assert.ok(Finance.reminders(s, '2026-10-08', 2).some(r => r.date === '2026-10-10')); // a atual segue com vencimento
+  // pagamento da fatura de julho (já vencida) fica com ela e não abate a de outubro
+  s.txs.push(mk('pg', 'expense', 10000, '2026-07-10', true, '', 'c', CARD_PAYMENT_CAT));
+  cs = Finance.cardStatus(s, s.cards[0], '2026-10-08');
+  assert.equal(cs.invoices.find(i => i.ym === ym(2026, 10)).open, 10000);
+  assert.equal(cs.used, 30000);
+  // pagamento feito em 08/10 abate a fatura em aberto mais antiga (outubro, vence 10/10)
+  s.txs.push(mk('pg2', 'expense', 10000, '2026-10-08', true, '', 'c', CARD_PAYMENT_CAT));
+  cs = Finance.cardStatus(s, s.cards[0], '2026-10-08');
+  assert.equal(cs.invoices.find(i => i.ym === ym(2026, 10)).open, 0);
+  assert.equal(cs.used, 20000);
+  // em 11/10 a fatura de outubro venceu e passa a ser considerada paga sozinha
+  cs = Finance.cardStatus(s, s.cards[0], '2026-10-11');
+  assert.deepEqual(cs.invoices.filter(i => i.open > 0).map(i => i.ym), [ym(2026, 11), ym(2026, 12)]);
+  assert.equal(cs.used, 20000);
+});
+
 test('finanças: saldo previsto', () => {
   const s = withCard(100000);
   s.accounts[0].initial = 100000;

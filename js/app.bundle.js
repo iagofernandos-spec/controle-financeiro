@@ -240,25 +240,37 @@
     /** vencimento: mesmo mês se vence depois do fechamento, senão no mês seguinte */
     invoiceDue: (c, ym) => ymDay(c.due > c.close ? ym : ym + 1, c.due),
     invoiceClose: (c, ym) => ymDay(ym, c.close),
-    /** Limite usado inclui parcelas futuras; pagamentos abatem da fatura mais antiga. */
+    /** Limite usado inclui parcelas futuras. A lógica segue as datas: o lançamento da compra define
+     *  a fatura (pelo fechamento) e o vencimento define o que ainda está em aberto — faturas já
+     *  vencidas (vencimento antes de hoje) são consideradas pagas. Pagamentos abatem as faturas em
+     *  aberto (mais antiga primeiro); um pagamento feito para fatura já vencida fica com ela. */
     cardStatus(s, c, today2) {
       const purchases = s.txs.filter((t) => t.cardId === c.id && t.kind === "expense");
-      const paid = sumOf(s.txs.filter((t) => t.cardPayment === c.id && t.paid));
+      const payments = s.txs.filter((t) => t.cardPayment === c.id && t.paid);
       const by = /* @__PURE__ */ new Map();
       for (const p of purchases) {
         const k = Finance.invoiceYm(c, p.date);
         by.set(k, (by.get(k) || 0) + p.value);
       }
-      let left = paid;
+      const targetYm = (d) => {
+        const y0 = ymOf(d);
+        return dom(d) >= Math.min(c.close, ymLen(y0)) ? y0 : y0 - 1;
+      };
+      let left = 0;
+      for (const p of payments) if (Finance.invoiceDue(c, targetYm(p.date)) >= today2) left += p.value;
+      let openSum = 0;
       const invoices = [...by.keys()].sort((a, b) => a - b).map((ym) => {
-        const total = by.get(ym), pay = Math.min(left, total);
-        left -= pay;
+        const total = by.get(ym);
+        const settled = Finance.invoiceDue(c, ym) < today2;
+        const pay = settled ? total : Math.min(left, total);
+        if (!settled) left -= pay;
         const close = Finance.invoiceClose(c, ym);
+        openSum += total - pay;
         return { ym, total, paid: pay, open: total - pay, close, due: Finance.invoiceDue(c, ym), closed: today2 > close };
       });
-      const spent = sumOf(purchases), used = Math.max(0, spent - paid);
+      const used = openSum;
       const current = invoices.find((i) => i.open > 0 && i.closed) || invoices.find((i) => i.open > 0 && !i.closed) || null;
-      return { used, available: Math.max(0, c.limit - used), credit: Math.max(0, paid - spent), invoices, current };
+      return { used, available: Math.max(0, c.limit - used), credit: Math.max(0, left), invoices, current };
     },
     // ---- saldos
     accountBalance: (s, a) => a.initial + s.txs.filter((t) => t.accountId === a.id && !isCard(t) && t.paid).reduce((n, t) => t.kind === "income" ? n + t.value : n - t.value, 0),
@@ -2979,7 +2991,7 @@ Public License instead of this License.  But first, please read
   var why = (text) => `<details class="why"><summary>${icon("help", 16)}<span>Por quê?</span></summary><p>${esc(text)}</p></details>`;
 
   // js/ctx.js
-  var APP_VERSION = "1.0.1";
+  var APP_VERSION = "1.0.2";
   var ctx = {
     state: null,
     // dados (AppState do core)
@@ -5232,6 +5244,8 @@ ${bad} item(ns) inválido(s) será(ão) ignorado(s).` : "") + "\nSubstituir os d
   }
   function whatsNew() {
     const items = [
+      "1.0.2 — faturas de cartão pelas datas: a compra entra na fatura pelo fechamento e o vencimento define o que está em aberto; faturas já vencidas são consideradas pagas automaticamente (compras parceladas antigas não ficam mais em atraso).",
+      "1.0.1 — a sincronização da nuvem se reconecta sozinha, sem precisar de F5, e o login do Google foi corrigido.",
       "1.0.0 — primeiro lançamento do Controle Financeiro.",
       "Nuvem opcional: entre com o Google e sincronize entre Windows, Android e outros navegadores, com os dados cifrados numa planilha da sua conta Google. Duas pessoas podem usar ao mesmo tempo; conflitos avisam e nada se perde.",
       "Layout para computador e notebook: barra lateral com saldo, telas em 2 ou 3 colunas, atalhos de teclado e janelas centrais.",

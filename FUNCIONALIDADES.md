@@ -70,7 +70,7 @@ As teclas simples funcionam fora dos campos de texto, em qualquer navegador. Num
 ## Cartões, faturas e recorrências
 
 - Dia de fechamento e de vencimento; compras após o fechamento vão para a fatura seguinte.
-- O limite usado inclui parcelas futuras; os pagamentos abatem primeiro a fatura mais antiga.
+- O limite usado inclui parcelas futuras. As faturas seguem as datas: a compra entra na fatura pelo fechamento e o vencimento define o que está em aberto — **faturas já vencidas são consideradas pagas automaticamente** (compras antigas não ficam em atraso); a fatura atual continua com aviso de vencimento. Pagamentos abatem as faturas em aberto mais antigas.
 - "Pagar fatura" registra o pagamento debitando a conta escolhida, sem contar como despesa nova.
 - Recorrências geradas na abertura e na virada do dia. Meses em que o app ficou fechado são recuperados (até 24 de uma vez), nunca antes da data de início. Dia 31 vira o último dia em meses curtos. Recorrências podem ser pausadas.
 

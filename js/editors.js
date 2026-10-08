@@ -590,6 +590,8 @@ export function shortcutsDialog() {
 }
 export function whatsNew() {
   const items = [
+    '1.0.2 — faturas de cartão pelas datas: a compra entra na fatura pelo fechamento e o vencimento define o que está em aberto; faturas já vencidas são consideradas pagas automaticamente (compras parceladas antigas não ficam mais em atraso).',
+    '1.0.1 — a sincronização da nuvem se reconecta sozinha, sem precisar de F5, e o login do Google foi corrigido.',
     '1.0.0 — primeiro lançamento do Controle Financeiro.',
     'Nuvem opcional: entre com o Google e sincronize entre Windows, Android e outros navegadores, com os dados cifrados numa planilha da sua conta Google. Duas pessoas podem usar ao mesmo tempo; conflitos avisam e nada se perde.',
     'Layout para computador e notebook: barra lateral com saldo, telas em 2 ou 3 colunas, atalhos de teclado e janelas centrais.',

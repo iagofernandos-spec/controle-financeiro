@@ -1,5 +1,12 @@
 # Changelog — Controle Financeiro (PWA)
 
+## 1.0.2 — faturas de cartão pelas datas (08/10/2026)
+
+- **Compras parceladas antigas não aparecem mais como atrasadas:** a fatura de cada compra segue a data do lançamento e o **fechamento** do cartão; o **vencimento** define o que ainda está em aberto. Faturas já vencidas (vencimento antes de hoje) são consideradas pagas automaticamente — ex.: compra em 25/06 num cartão que fecha dia 02 cai na fatura de julho e não conta como atraso.
+- **A fatura atual continua em aberto**, com aviso de vencimento (ex.: "vence 10/10") — o app deixa de cobrar só o que já venceu.
+- **Pagamentos abatem as faturas em aberto mais antigas**; um pagamento registrado para uma fatura já vencida fica com ela (não é contado duas vezes).
+- Testes: 112 (`node --test`), todos passando.
+
 ## 1.0.1 — reconexão da nuvem sem recarregar a página (08/10/2026)
 
 - **A sincronização não fica mais parada quando a sessão do Google expira** (~1 hora): o app renova a sessão antes de vencer (silenciosamente, quando o navegador permite); se não conseguir, mostra o cartão **“Continuar como…”** com um aviso — um toque reconecta e a sincronização volta sozinha. Antes, era preciso recarregar a página (F5) para as alterações aparecerem no outro aparelho.

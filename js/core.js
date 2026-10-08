@@ -150,21 +150,32 @@ export const Finance = {
   invoiceDue: (c, ym) => ymDay(c.due > c.close ? ym : ym + 1, c.due),
   invoiceClose: (c, ym) => ymDay(ym, c.close),
 
-  /** Limite usado inclui parcelas futuras; pagamentos abatem da fatura mais antiga. */
+  /** Limite usado inclui parcelas futuras. A lógica segue as datas: o lançamento da compra define
+   *  a fatura (pelo fechamento) e o vencimento define o que ainda está em aberto — faturas já
+   *  vencidas (vencimento antes de hoje) são consideradas pagas. Pagamentos abatem as faturas em
+   *  aberto (mais antiga primeiro); um pagamento feito para fatura já vencida fica com ela. */
   cardStatus(s, c, today) {
     const purchases = s.txs.filter(t => t.cardId === c.id && t.kind === 'expense');
-    const paid = sumOf(s.txs.filter(t => t.cardPayment === c.id && t.paid));
+    const payments = s.txs.filter(t => t.cardPayment === c.id && t.paid);
     const by = new Map();
     for (const p of purchases) { const k = Finance.invoiceYm(c, p.date); by.set(k, (by.get(k) || 0) + p.value); }
-    let left = paid;
+    // fatura que cada pagamento abate: a última fechada até a data do pagamento
+    const targetYm = d => { const y0 = ymOf(d); return dom(d) >= Math.min(c.close, ymLen(y0)) ? y0 : y0 - 1; };
+    let left = 0;
+    for (const p of payments) if (Finance.invoiceDue(c, targetYm(p.date)) >= today) left += p.value;
+    let openSum = 0;
     const invoices = [...by.keys()].sort((a, b) => a - b).map(ym => {
-      const total = by.get(ym), pay = Math.min(left, total); left -= pay;
+      const total = by.get(ym);
+      const settled = Finance.invoiceDue(c, ym) < today;
+      const pay = settled ? total : Math.min(left, total);
+      if (!settled) left -= pay;
       const close = Finance.invoiceClose(c, ym);
+      openSum += total - pay;
       return { ym, total, paid: pay, open: total - pay, close, due: Finance.invoiceDue(c, ym), closed: today > close };
     });
-    const spent = sumOf(purchases), used = Math.max(0, spent - paid);
+    const used = openSum;
     const current = invoices.find(i => i.open > 0 && i.closed) || invoices.find(i => i.open > 0 && !i.closed) || null;
-    return { used, available: Math.max(0, c.limit - used), credit: Math.max(0, paid - spent), invoices, current };
+    return { used, available: Math.max(0, c.limit - used), credit: Math.max(0, left), invoices, current };
   },
 
   // ---- saldos
