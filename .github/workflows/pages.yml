@@ -1,9 +1,9 @@
-﻿# Controle Financeiro — baseado no Finan+ — modificado em 2026 — Copyright (C) 2026 Juscelino Be
+# Controle Financeiro — baseado no Finan+ — modificado em 2026 — Copyright (C) 2026 Juscelino Be
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Publica o Controle Financeiro web no GitHub Pages a cada envio para a branch main:
-# instala, gera o bundle, roda os testes (se algum falhar, nada Ã© publicado), monta _site/ e publica.
-# Uma vez sÃ³: Settings â€º Pages â€º Build and deployment â€º Source: "GitHub Actions".
+# instala, gera o bundle, roda os testes (se algum falhar, nada é publicado), monta _site/ e publica.
+# Uma vez só: Settings › Pages › Build and deployment › Source: "GitHub Actions".
 name: Publicar no GitHub Pages
 
 on:
