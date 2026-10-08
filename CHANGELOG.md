@@ -1,5 +1,11 @@
 # Changelog — Controle Financeiro (PWA)
 
+## 1.0.1 — reconexão da nuvem sem recarregar a página (08/10/2026)
+
+- **A sincronização não fica mais parada quando a sessão do Google expira** (~1 hora): o app renova a sessão antes de vencer (silenciosamente, quando o navegador permite); se não conseguir, mostra o cartão **“Continuar como…”** com um aviso — um toque reconecta e a sincronização volta sozinha. Antes, era preciso recarregar a página (F5) para as alterações aparecerem no outro aparelho.
+- **CSP do login corrigida:** o estilo do cartão do Google (`accounts.google.com/gsi/style`) estava bloqueado pela política de segurança e podia impedir o cartão de aparecer. Também liberadas as imagens de avatar (`googleusercontent.com`) e as fontes (`fonts.gstatic.com`).
+- Ao tentar sincronizar sem sessão válida (ex.: token vencido no meio do uso), a reconexão com um toque é disparada na hora, sem esperar o próximo ciclo.
+
 ## 1.0.0 — primeiro lançamento (08/10/2026)
 
 Controle financeiro pessoal simples, privado e offline, para instalar no Windows, no Android e no navegador — com **nuvem opcional na sua própria conta Google**, cifrada de ponta a ponta.

@@ -2979,7 +2979,7 @@ Public License instead of this License.  But first, please read
   var why = (text) => `<details class="why"><summary>${icon("help", 16)}<span>Por quê?</span></summary><p>${esc(text)}</p></details>`;
 
   // js/ctx.js
-  var APP_VERSION = "1.0.0";
+  var APP_VERSION = "1.0.1";
   var ctx = {
     state: null,
     // dados (AppState do core)
@@ -4475,7 +4475,7 @@ Este programa é distribuído na esperança de que seja útil, mas SEM NENHUMA G
       return null;
     }
   }
-  async function requestGoogleToken({ clientId, silent = false, render: render2 = null, timeoutMs = silent ? 8e3 : 0 } = {}) {
+  async function requestGoogleToken({ clientId, silent = false, oneTap = false, render: render2 = null, timeoutMs = null } = {}) {
     if (clientId === "dev-mock") {
       const email = (globalThis.FinanPlus?.mockEmail || "dev@finanplus.local").toLowerCase();
       return { credential: "dev:" + email, email, name: "Desenvolvimento", exp: Math.floor(Date.now() / 1e3) + 3600 };
@@ -4500,7 +4500,8 @@ Este programa é distribuído na esperança de que seja útil, mas SEM NENHUMA G
         callback: accept,
         auto_select: silent,
         cancel_on_tap_outside: true,
-        use_fedcm_for_prompt: true
+        // A seleção automática (silenciosa) só funciona no One Tap clássico; o cartão visível usa o FedCM (mais moderno).
+        use_fedcm_for_prompt: !silent
       });
       if (render2) {
         globalThis.google.accounts.id.renderButton(render2, { theme: "outline", size: "large", shape: "pill", text: "continue_with", locale: "pt-BR", width: 280 });
@@ -4509,7 +4510,8 @@ Este programa é distribuído na esperança de que seja útil, mas SEM NENHUMA G
       globalThis.google.accounts.id.prompt((n) => {
         if (n?.isNotDisplayed?.() || n?.isSkippedMoment?.() || n?.isDismissedMoment?.()) finish(null);
       });
-      if (silent && timeoutMs) timer = setTimeout(() => finish(null), timeoutMs);
+      const wait = timeoutMs != null ? timeoutMs : silent ? 8e3 : oneTap ? 12e4 : 0;
+      if (wait) timer = setTimeout(() => finish(null), wait);
     });
   }
   function disableGoogleAutoSelect() {
@@ -5745,9 +5747,10 @@ ${bad} item(ns) inválido(s) será(ão) ignorado(s).` : "") + "\nSubstituir os d
     for (const k of ["code", "seen", "dirty", "lastSeq"]) await idbDel(k);
   }
   var now = () => Date.now();
-  var _Sync_instances, emit_fn, setPhase_fn, googleToken_fn, call_fn2, snapshotState_fn, applyState_fn, persistSoon_fn, persist_fn;
+  var _Sync_instances, emit_fn, setPhase_fn, renewOneTap_fn, googleToken_fn, call_fn2, snapshotState_fn, applyState_fn, persistSoon_fn, persist_fn;
   var Sync = class {
     constructor({ cloud = null, google = null, clientId = "", getState = null, apply: apply2 = null, notify = () => {
+    }, toast: toast2 = () => {
     }, onStatus = () => {
     }, isPaused = null, deviceLabel = "" } = {}) {
       __privateAdd(this, _Sync_instances);
@@ -5758,6 +5761,7 @@ ${bad} item(ns) inválido(s) será(ão) ignorado(s).` : "") + "\nSubstituir os d
       this.apply = apply2;
       this.isPaused = isPaused;
       this.notify = notify;
+      this.toast = toast2;
       this.onStatus = onStatus;
       this.deviceId = loadDeviceId();
       this.label = deviceLabel || "";
@@ -5778,6 +5782,8 @@ ${bad} item(ns) inválido(s) será(ão) ignorado(s).` : "") + "\nSubstituir os d
       this.pushTimer = null;
       this.tickTimer = null;
       this.lastSilentAt = 0;
+      this.lastOneTapAt = 0;
+      this.renewing = false;
       this.onVis = null;
       this.onLine = null;
     }
@@ -5836,7 +5842,11 @@ ${bad} item(ns) inválido(s) será(ão) ignorado(s).` : "") + "\nSubstituir os d
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", this.onVis);
       globalThis.removeEventListener?.("online", this.onLine);
     }
-    /** Um passo: entra de novo se preciso (sem interação), puxa e envia. */
+    /**
+     * Um passo: renova a sessão do Google se preciso (antes de expirar), puxa e envia.
+     * Se a renovação silenciosa não funcionar, mostra o cartão "Continuar como…" (um toque) —
+     * sem ele, a sincronização ficava parada até recarregar a página.
+     */
     async tick() {
       if (!this.cloud || !this.session) {
         return;
@@ -5846,11 +5856,27 @@ ${bad} item(ns) inválido(s) será(ão) ignorado(s).` : "") + "\nSubstituir os d
         __privateMethod(this, _Sync_instances, setPhase_fn).call(this, "needKey");
         return;
       }
-      if (!this.token && now() - this.lastSilentAt > 4 * 6e4) {
-        this.lastSilentAt = now();
+      const visible = typeof document === "undefined" || !document.hidden;
+      if (this.token && this.token.exp * 1e3 - now() < 15 * 6e4) {
         const t = await __privateMethod(this, _Sync_instances, googleToken_fn).call(this, true);
-        if (!t) {
-          if (typeof document === "undefined" || !document.hidden) __privateMethod(this, _Sync_instances, setPhase_fn).call(this, "signedOut");
+        if (!t && visible) {
+          __privateMethod(this, _Sync_instances, renewOneTap_fn).call(this);
+          return;
+        }
+      }
+      if (!this.token) {
+        if (now() - this.lastSilentAt > 2 * 6e4) {
+          this.lastSilentAt = now();
+          const t = await __privateMethod(this, _Sync_instances, googleToken_fn).call(this, true);
+          if (!t) {
+            if (visible) {
+              __privateMethod(this, _Sync_instances, renewOneTap_fn).call(this);
+              return;
+            }
+            __privateMethod(this, _Sync_instances, setPhase_fn).call(this, "signedOut");
+            return;
+          }
+        } else {
           return;
         }
       }
@@ -6228,6 +6254,27 @@ ${bad} item(ns) inválido(s) será(ão) ignorado(s).` : "") + "\nSubstituir os d
       __privateMethod(this, _Sync_instances, emit_fn).call(this);
     }
   };
+  /** Mostra o cartão do Google "Continuar como…" para renovar a sessão com um toque (no máximo a cada 3 min). */
+  renewOneTap_fn = function() {
+    if (this.renewing || !this.session) return;
+    if (typeof document === "undefined" || document.hidden) return;
+    if (now() - this.lastOneTapAt < 3 * 6e4) return;
+    this.lastOneTapAt = now();
+    this.renewing = true;
+    __privateMethod(this, _Sync_instances, setPhase_fn).call(this, "signedOut");
+    this.toast("Nuvem: toque em “Continuar como…” para reconectar a sincronização.", 8e3);
+    Promise.resolve(this.google.requestToken({ silent: false, oneTap: true, clientId: this.clientId })).then((t) => {
+      this.renewing = false;
+      if (t?.credential) {
+        this.token = t;
+        __privateMethod(this, _Sync_instances, setPhase_fn).call(this, "ready");
+        this.syncNow();
+      } else __privateMethod(this, _Sync_instances, setPhase_fn).call(this, "signedOut");
+    }).catch(() => {
+      this.renewing = false;
+      __privateMethod(this, _Sync_instances, setPhase_fn).call(this, "signedOut");
+    });
+  };
   googleToken_fn = async function(silent, render2 = null) {
     try {
       const t = await this.google.requestToken({ silent, render: render2, clientId: this.clientId });
@@ -6245,6 +6292,7 @@ ${bad} item(ns) inválido(s) será(ão) ignorado(s).` : "") + "\nSubstituir os d
       const t = await __privateMethod(this, _Sync_instances, googleToken_fn).call(this, true);
       if (!t) {
         __privateMethod(this, _Sync_instances, setPhase_fn).call(this, "signedOut");
+        __privateMethod(this, _Sync_instances, renewOneTap_fn).call(this);
         const e = new Error("Sessão do Google expirada.");
         e.code = "auth_invalid";
         throw e;
@@ -6255,6 +6303,7 @@ ${bad} item(ns) inválido(s) será(ão) ignorado(s).` : "") + "\nSubstituir os d
     } catch (e) {
       if (e.code === "auth_invalid") {
         this.token = null;
+        __privateMethod(this, _Sync_instances, renewOneTap_fn).call(this);
       }
       throw e;
     }
@@ -7018,9 +7067,6 @@ ${r.dropped} item(ns) inválido(s) foram ignorados.` : "")]);
     if (ctx.problem || !ctx.state) return;
     const c = ctx.cloud || {};
     const phase = c.phase || "";
-    if (phase === "signedOut" && cloudPrevPhase && cloudPrevPhase !== "signedOut" && c.email && ctx.cloudCfg) {
-      toast("A sessão do Google expirou. Entre de novo em Ajustes › Conta e nuvem.", 6e3);
-    }
     cloudPrevPhase = phase;
     const foot = $("#sideFoot");
     if (foot) foot.innerHTML = sideFootHtml();
@@ -7046,6 +7092,9 @@ ${r.dropped} item(ns) inválido(s) foram ignorados.` : "")]);
       notify: (t, m) => {
         if (ctx.locked || ctx.problem) pending.push([t, m]);
         else notice(t, m);
+      },
+      toast: (m, ms) => {
+        if (!ctx.locked && !ctx.problem) toast(m, ms);
       },
       onStatus: (info) => {
         ctx.cloud = info;

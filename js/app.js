@@ -585,9 +585,6 @@ function cloudUi() {
   if (ctx.problem || !ctx.state) return;
   const c = ctx.cloud || {};
   const phase = c.phase || '';
-  if (phase === 'signedOut' && cloudPrevPhase && cloudPrevPhase !== 'signedOut' && c.email && ctx.cloudCfg) {
-    toast('A sessão do Google expirou. Entre de novo em Ajustes › Conta e nuvem.', 6000);
-  }
   cloudPrevPhase = phase;
   const foot = $('#sideFoot'); if (foot) foot.innerHTML = S.sideFootHtml();
   const sig = [phase, c.message || '', c.pending || 0, c.hasKey ? 1 : 0, c.email || '', c.isAdmin ? 1 : 0].join('|');
@@ -604,6 +601,7 @@ async function cloudInit() {
     getState: () => ctx.state,
     apply: s => ctx.replace(s),
     notify: (t, m) => { if (ctx.locked || ctx.problem) pending.push([t, m]); else notice(t, m); },
+    toast: (m, ms) => { if (!ctx.locked && !ctx.problem) toast(m, ms); },
     onStatus: info => { ctx.cloud = info; cloudUi(); },
     isPaused: () => !!(ctx.locked || ctx.problem),
   });

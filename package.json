@@ -1,6 +1,6 @@
 {
   "name": "controle-financeiro",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Controle Financeiro (PWA): controle financeiro pessoal simples, privado e offline, com nuvem opcional",
   "license": "GPL-3.0-or-later",

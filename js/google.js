@@ -40,12 +40,13 @@ export function decodeCredential(jwt) {
  * Pede um ID token ao Google.
  *
  * - `render(el)`: coloca o botão oficial do Google dentro de [el]; a promessa resolve quando a pessoa entrar.
- * - `silent: true`: tenta entrar sem interação (One Tap), com prazo curto; resolve null se não der.
+ * - `silent: true`: tenta entrar sem interação (One Tap com seleção automática), com prazo curto; resolve null se não der.
+ * - `oneTap: true`: mostra o cartão "Continuar como…" e espera a pessoa tocar (até 2 minutos); resolve null se fechar.
  * - sem opções: dispara o One Tap e espera; resolve null se a pessoa fechar.
  *
  * Em todos os modos resolve com { credential, email, name, exp } ou null.
  */
-export async function requestGoogleToken({ clientId, silent = false, render = null, timeoutMs = silent ? 8000 : 0 } = {}) {
+export async function requestGoogleToken({ clientId, silent = false, oneTap = false, render = null, timeoutMs = null } = {}) {
   if (clientId === 'dev-mock') {
     // desenvolvimento local (tools/mock-cloud.mjs): token de mentira, sem falar com o Google
     const email = (globalThis.FinanPlus?.mockEmail || 'dev@finanplus.local').toLowerCase();
@@ -71,7 +72,8 @@ export async function requestGoogleToken({ clientId, silent = false, render = nu
       callback: accept,
       auto_select: silent,
       cancel_on_tap_outside: true,
-      use_fedcm_for_prompt: true,
+      // A seleção automática (silenciosa) só funciona no One Tap clássico; o cartão visível usa o FedCM (mais moderno).
+      use_fedcm_for_prompt: !silent,
     });
     if (render) {
       globalThis.google.accounts.id.renderButton(render, { theme: 'outline', size: 'large', shape: 'pill', text: 'continue_with', locale: 'pt-BR', width: 280 });
@@ -80,7 +82,8 @@ export async function requestGoogleToken({ clientId, silent = false, render = nu
     globalThis.google.accounts.id.prompt(n => {
       if (n?.isNotDisplayed?.() || n?.isSkippedMoment?.() || n?.isDismissedMoment?.()) finish(null);
     });
-    if (silent && timeoutMs) timer = setTimeout(() => finish(null), timeoutMs);
+    const wait = timeoutMs != null ? timeoutMs : silent ? 8000 : oneTap ? 120000 : 0;
+    if (wait) timer = setTimeout(() => finish(null), wait);
   });
 }
 

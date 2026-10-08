@@ -182,10 +182,10 @@ const now = () => Date.now();
  * onStatus(info) → atualiza a interface.
  */
 export class Sync {
-  constructor({ cloud = null, google = null, clientId = '', getState = null, apply = null, notify = () => {}, onStatus = () => {}, isPaused = null, deviceLabel = '' } = {}) {
+  constructor({ cloud = null, google = null, clientId = '', getState = null, apply = null, notify = () => {}, toast = () => {}, onStatus = () => {}, isPaused = null, deviceLabel = '' } = {}) {
     this.cloud = cloud; this.google = google; this.clientId = clientId;
     this.getState = getState; this.apply = apply; this.isPaused = isPaused;
-    this.notify = notify; this.onStatus = onStatus;
+    this.notify = notify; this.toast = toast; this.onStatus = onStatus;
     this.deviceId = loadDeviceId();
     this.label = deviceLabel || '';
     this.code = ''; this.key = null;
@@ -203,6 +203,8 @@ export class Sync {
     this.started = false;
     this.pushTimer = null; this.tickTimer = null;
     this.lastSilentAt = 0;
+    this.lastOneTapAt = 0;   // última vez que mostramos o cartão "Continuar como…" (renovação visível)
+    this.renewing = false;   // cartão visível em andamento
     this.onVis = null; this.onLine = null;
   }
 
@@ -252,18 +254,54 @@ export class Sync {
     globalThis.removeEventListener?.('online', this.onLine);
   }
 
-  /** Um passo: entra de novo se preciso (sem interação), puxa e envia. */
+  /**
+   * Um passo: renova a sessão do Google se preciso (antes de expirar), puxa e envia.
+   * Se a renovação silenciosa não funcionar, mostra o cartão "Continuar como…" (um toque) —
+   * sem ele, a sincronização ficava parada até recarregar a página.
+   */
   async tick() {
     if (!this.cloud || !this.session) { return; }
     if (this.isPaused?.()) return;
     if (!this.code) { this.#setPhase('needKey'); return; }
-    if (!this.token && now() - this.lastSilentAt > 4 * 60000) {
-      this.lastSilentAt = now();
+    const visible = typeof document === 'undefined' || !document.hidden;
+    // perto de expirar (a validade do token é ~1 h): renova antes, sem interação quando der
+    if (this.token && this.token.exp * 1000 - now() < 15 * 60000) {
       const t = await this.#googleToken(true);
-      if (!t) { if (typeof document === 'undefined' || !document.hidden) this.#setPhase('signedOut'); return; }
+      if (!t && visible) { this.#renewOneTap(); return; }
+    }
+    if (!this.token) {
+      if (now() - this.lastSilentAt > 2 * 60000) {
+        this.lastSilentAt = now();
+        const t = await this.#googleToken(true);
+        if (!t) {
+          if (visible) { this.#renewOneTap(); return; }
+          this.#setPhase('signedOut');
+          return;
+        }
+      } else {
+        return;
+      }
     }
     if (!this.token) { this.#setPhase('signedOut'); return; }
     await this.syncNow();
+  }
+
+  /** Mostra o cartão do Google "Continuar como…" para renovar a sessão com um toque (no máximo a cada 3 min). */
+  #renewOneTap() {
+    if (this.renewing || !this.session) return;
+    if (typeof document === 'undefined' || document.hidden) return;
+    if (now() - this.lastOneTapAt < 3 * 60000) return;
+    this.lastOneTapAt = now();
+    this.renewing = true;
+    this.#setPhase('signedOut');
+    this.toast('Nuvem: toque em “Continuar como…” para reconectar a sincronização.', 8000);
+    Promise.resolve(this.google.requestToken({ silent: false, oneTap: true, clientId: this.clientId }))
+      .then(t => {
+        this.renewing = false;
+        if (t?.credential) { this.token = t; this.#setPhase('ready'); this.syncNow(); }
+        else this.#setPhase('signedOut');
+      })
+      .catch(() => { this.renewing = false; this.#setPhase('signedOut'); });
   }
 
   /** Gravações locais pendentes sobem logo após a edição (com uma pequena espera para agrupar). */
@@ -560,12 +598,16 @@ export class Sync {
   async #call(action, params) {
     if (!this.token) {
       const t = await this.#googleToken(true);
-      if (!t) { this.#setPhase('signedOut'); const e = new Error('Sessão do Google expirada.'); e.code = 'auth_invalid'; throw e; }
+      if (!t) {
+        this.#setPhase('signedOut');
+        this.#renewOneTap(); // cartão visível para reconectar com um toque
+        const e = new Error('Sessão do Google expirada.'); e.code = 'auth_invalid'; throw e;
+      }
     }
     try {
       return await this.cloud.call(action, params, this.token.credential);
     } catch (e) {
-      if (e.code === 'auth_invalid') { this.token = null; }
+      if (e.code === 'auth_invalid') { this.token = null; this.#renewOneTap(); }
       throw e;
     }
   }
