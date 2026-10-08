@@ -383,7 +383,7 @@ export function prefsView(env) {
     <div class="btnGrid">${btn('Exportar CSV', { act: 'csv', icon: 'table-view', iconSize: 18 })}${btn('Backup JSON', { act: 'backup', icon: 'download', iconSize: 18 })}
     ${btn('Restaurar', { act: 'restore', icon: 'upload', iconSize: 18 })}${btn('Relatório em PDF', { act: 'pdf', icon: 'picture-as-pdf', iconSize: 18 })}
     ${env.remote ? '' : btn('Apagar tudo', { act: 'wipe', cls: 'dangerB', icon: 'delete', iconSize: 18 })}</div>
-    <p class="muted small">O backup JSON é compatível com o Finan+ Android e com a versão Linux do Controle Financeiro: dá para levar os dados de um para o outro. O arquivo de backup não é criptografado; guarde-o em local seguro.</p>`, 'database');
+    <p class="muted small">O backup JSON é compatível com o Finan+ (web, Android e Linux): dá para importar dados de lá. O arquivo de backup não é criptografado; guarde-o em local seguro.</p>`, 'database');
 
   const about = fold('sobre', 'Sobre', `Conheça o Controle Financeiro · versão ${APP_VERSION}`, aboutHtml(env), 'info');
   const nuvem = env.remote ? '' : cloudFold();

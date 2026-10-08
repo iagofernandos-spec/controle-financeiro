@@ -1,4 +1,4 @@
-# Finan+ — Copyright (C) 2026 Juscelino Be
+# Controle Financeiro — baseado no Finan+ — modificado em 2026 — Copyright (C) 2026 Juscelino Be
 # SPDX-License-Identifier: GPL-3.0-or-later
 # ============================================================================
 #  Finan+ · Dicionário inicial do assistente
