@@ -1,0 +1,23 @@
+{
+  "name": "controle-financeiro",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Controle Financeiro (PWA): controle financeiro pessoal simples, privado e offline, com nuvem opcional",
+  "license": "GPL-3.0-or-later",
+  "author": "Iago Fernando Santos",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "build": "node tools/build.mjs",
+    "site": "node tools/site.mjs",
+    "mock-cloud": "node tools/mock-cloud.mjs",
+    "preview": "npm run build && npm run site && node tools/dev-server.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.2",
+    "fake-indexeddb": "^6.2.5"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
